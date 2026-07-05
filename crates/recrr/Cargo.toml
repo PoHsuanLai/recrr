@@ -34,10 +34,16 @@ rusqlite = ["dep:rusqlite"]
 
 [dev-dependencies]
 tokio = { workspace = true }
+proptest = "1"
 
 # Convergence tests run against the rusqlite backend.
 [[test]]
 name = "convergence"
+required-features = ["rusqlite"]
+
+# Randomized property/robustness tests, also against the rusqlite backend.
+[[test]]
+name = "proptest_convergence"
 required-features = ["rusqlite"]
 
 [[example]]

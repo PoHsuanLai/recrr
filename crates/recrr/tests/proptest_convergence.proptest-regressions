@@ -1,0 +1,8 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc 5e89582e999eb3b183f4a8efad43fb875bdc605353a4c95653b3ba412f514445 # shrinks to ops = [Insert { device: 0, pk: 0 }, Delete { device: 0, pk: 0 }]
+cc 3a877546fadbab5381229f3cce4894332d80ac5e869bd21142c8fe3c9e7a0eab # shrinks to ops = [Insert { device: 1, pk: 1 }, Delete { device: 1, pk: 1 }, Insert { device: 0, pk: 0 }], perm_seed = 2388077869149981504

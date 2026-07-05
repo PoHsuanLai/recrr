@@ -4,150 +4,8 @@
 
 mod support;
 
-use recrr::backends::SqliteDb;
-use recrr::{ChangeRow, Crr, Db, Value};
-use support::{new_db, test_schema, PAPER_COLS};
-
-/// A test "device": its own database + recrr handle.
-struct Device {
-    crr: Crr<SqliteDb>,
-}
-
-impl Device {
-    async fn new() -> Self {
-        let crr = Crr::new(new_db().await, test_schema());
-        crr.init().await.unwrap();
-        Self { crr }
-    }
-
-    /// Insert a paper (real row + tracking) and return its id.
-    async fn insert_paper(&self, id: &str, title: &str) {
-        let now = "2026-01-01T00:00:00Z";
-        self.crr
-            .db()
-            .execute(
-                "INSERT INTO papers (id, title, authors, is_favorite, is_read, date_added, date_modified) \
-                 VALUES (?1, ?2, '[]', 0, 0, ?3, ?3)",
-                vec![
-                    Value::Text(id.to_string()),
-                    Value::Text(title.to_string()),
-                    Value::Text(now.to_string()),
-                ],
-            )
-            .await
-            .unwrap();
-        self.crr
-            .track_insert("papers", id, PAPER_COLS)
-            .await
-            .unwrap();
-    }
-
-    async fn set_title(&self, id: &str, title: &str) {
-        self.crr
-            .db()
-            .execute(
-                "UPDATE papers SET title = ?1 WHERE id = ?2",
-                vec![Value::Text(title.to_string()), Value::Text(id.to_string())],
-            )
-            .await
-            .unwrap();
-        self.crr
-            .track_update("papers", id, &["title"])
-            .await
-            .unwrap();
-    }
-
-    async fn set_favorite(&self, id: &str, fav: bool) {
-        self.crr
-            .db()
-            .execute(
-                "UPDATE papers SET is_favorite = ?1 WHERE id = ?2",
-                vec![Value::Integer(fav as i64), Value::Text(id.to_string())],
-            )
-            .await
-            .unwrap();
-        self.crr
-            .track_update("papers", id, &["is_favorite"])
-            .await
-            .unwrap();
-    }
-
-    async fn set_cover(&self, id: &str, bytes: &[u8]) {
-        self.crr
-            .db()
-            .execute(
-                "UPDATE papers SET cover = ?1 WHERE id = ?2",
-                vec![Value::Blob(bytes.to_vec()), Value::Text(id.to_string())],
-            )
-            .await
-            .unwrap();
-        self.crr
-            .track_update("papers", id, &["cover"])
-            .await
-            .unwrap();
-    }
-
-    async fn delete_paper(&self, id: &str) {
-        self.crr
-            .db()
-            .execute(
-                "DELETE FROM papers WHERE id = ?1",
-                vec![Value::Text(id.to_string())],
-            )
-            .await
-            .unwrap();
-        self.crr.track_delete("papers", id).await.unwrap();
-    }
-
-    /// Read a paper's title, or None if the row is gone.
-    async fn title(&self, id: &str) -> Option<String> {
-        let rows = self
-            .crr
-            .db()
-            .query(
-                "SELECT title FROM papers WHERE id = ?1",
-                vec![Value::Text(id.to_string())],
-            )
-            .await
-            .unwrap();
-        rows.into_iter()
-            .next()
-            .map(|r| r.get(0).as_text().unwrap_or_default().to_string())
-    }
-
-    async fn cover(&self, id: &str) -> Option<Vec<u8>> {
-        let rows = self
-            .crr
-            .db()
-            .query(
-                "SELECT cover FROM papers WHERE id = ?1",
-                vec![Value::Text(id.to_string())],
-            )
-            .await
-            .unwrap();
-        rows.into_iter()
-            .next()
-            .and_then(|r| r.get(0).as_blob().map(|b| b.to_vec()))
-    }
-
-    async fn paper_exists(&self, id: &str) -> bool {
-        self.title(id).await.is_some()
-    }
-
-    async fn changes(&self) -> Vec<ChangeRow> {
-        self.crr.changes_since(0).await.unwrap()
-    }
-
-    async fn apply(&self, changes: &[ChangeRow]) -> recrr::MergeResult {
-        self.crr.apply_changes(changes).await.unwrap()
-    }
-}
-
-/// One-way sync: apply every change from `src` into `dst`.
-async fn sync(src: &Device, dst: &Device) {
-    let changes = src.changes().await;
-    dst.apply(&changes).await;
-}
+use recrr::{ChangeRow, Db, Value};
+use support::{sync, Device};
 
 #[tokio::test]
 async fn insert_tracks_sentinel_and_columns() {
@@ -437,5 +295,34 @@ async fn three_device_convergence() {
         ta.as_deref(),
         Some("ccc"),
         "highest value wins across all three"
+    );
+}
+
+/// Regression (found by `proptest_convergence::prop_converges`): a row that is
+/// inserted and then deleted **before its first sync** must not resurrect as a
+/// blank skeleton on a peer.
+///
+/// Mechanism: `changes_since` stamps every ChangeRow's `cl` with the row's
+/// *current* sentinel CL, so the pre-sync insert's column entries carry the
+/// delete's even CL (2). They also sort *before* the sentinel by `(db_ver, seq)`
+/// — the delete overwrites the sentinel to a higher db_ver. The fix: the
+/// column-before-sentinel path in `merge.rs` seeds the tombstone sentinel but
+/// refuses to create a row for an even (deleted) CL, so existence converges to
+/// "absent" no matter the arrival order.
+#[tokio::test]
+async fn insert_then_delete_before_sync_does_not_resurrect() {
+    let a = Device::new().await;
+    let b = Device::new().await;
+
+    // A creates a paper and deletes it, all before ever syncing.
+    a.insert_paper("p1", "Ephemeral").await;
+    a.delete_paper("p1").await;
+
+    // A's whole history is one changeset. B applies it.
+    sync(&a, &b).await;
+
+    assert!(
+        !b.paper_exists("p1").await,
+        "peer must not resurrect a row that was deleted before its first sync"
     );
 }
