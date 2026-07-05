@@ -165,6 +165,45 @@ impl Device {
             .unwrap();
     }
 
+    pub async fn set_authors(&self, id: &str, authors: &str) {
+        self.crr
+            .db()
+            .execute(
+                "UPDATE papers SET authors = ?1 WHERE id = ?2",
+                vec![
+                    Value::Text(authors.to_string()),
+                    Value::Text(id.to_string()),
+                ],
+            )
+            .await
+            .unwrap();
+        self.crr
+            .track_update("papers", id, &["authors"])
+            .await
+            .unwrap();
+    }
+
+    /// Set the nullable `citation_count`. `None` writes SQL NULL, exercising the
+    /// `Value::Null` merge path.
+    pub async fn set_citation_count(&self, id: &str, count: Option<i64>) {
+        let val = match count {
+            Some(n) => Value::Integer(n),
+            None => Value::Null,
+        };
+        self.crr
+            .db()
+            .execute(
+                "UPDATE papers SET citation_count = ?1 WHERE id = ?2",
+                vec![val, Value::Text(id.to_string())],
+            )
+            .await
+            .unwrap();
+        self.crr
+            .track_update("papers", id, &["citation_count"])
+            .await
+            .unwrap();
+    }
+
     pub async fn set_cover(&self, id: &str, bytes: &[u8]) {
         self.crr
             .db()
@@ -225,6 +264,126 @@ impl Device {
 
     pub async fn paper_exists(&self, id: &str) -> bool {
         self.title(id).await.is_some()
+    }
+
+    // --- collections (single-PK table, exercises a second tracked table) ------
+
+    pub async fn insert_collection(&self, id: &str, name: &str) {
+        self.crr
+            .db()
+            .execute(
+                "INSERT INTO collections (id, name, position) VALUES (?1, ?2, 0)",
+                vec![Value::Text(id.to_string()), Value::Text(name.to_string())],
+            )
+            .await
+            .unwrap();
+        self.crr
+            .track_insert("collections", id, &["name", "parent_id", "position"])
+            .await
+            .unwrap();
+    }
+
+    pub async fn set_collection_name(&self, id: &str, name: &str) {
+        self.crr
+            .db()
+            .execute(
+                "UPDATE collections SET name = ?1 WHERE id = ?2",
+                vec![Value::Text(name.to_string()), Value::Text(id.to_string())],
+            )
+            .await
+            .unwrap();
+        self.crr
+            .track_update("collections", id, &["name"])
+            .await
+            .unwrap();
+    }
+
+    pub async fn delete_collection(&self, id: &str) {
+        self.crr
+            .db()
+            .execute(
+                "DELETE FROM collections WHERE id = ?1",
+                vec![Value::Text(id.to_string())],
+            )
+            .await
+            .unwrap();
+        self.crr.track_delete("collections", id).await.unwrap();
+    }
+
+    pub async fn collection_name(&self, id: &str) -> Option<String> {
+        let rows = self
+            .crr
+            .db()
+            .query(
+                "SELECT name FROM collections WHERE id = ?1",
+                vec![Value::Text(id.to_string())],
+            )
+            .await
+            .unwrap();
+        rows.into_iter()
+            .next()
+            .map(|r| r.get(0).as_text().unwrap_or_default().to_string())
+    }
+
+    pub async fn collection_exists(&self, id: &str) -> bool {
+        self.collection_name(id).await.is_some()
+    }
+
+    // --- paper_collections (composite-PK junction, no tracked columns) --------
+
+    /// Link a paper to a collection. The composite pk is `"{paper}:{collection}"`.
+    pub async fn link(&self, paper: &str, collection: &str) {
+        self.crr
+            .db()
+            .execute(
+                "INSERT INTO paper_collections (paper_id, collection_id) VALUES (?1, ?2)",
+                vec![
+                    Value::Text(paper.to_string()),
+                    Value::Text(collection.to_string()),
+                ],
+            )
+            .await
+            .unwrap();
+        let pk = format!("{paper}:{collection}");
+        self.crr
+            .track_insert("paper_collections", &pk, &[])
+            .await
+            .unwrap();
+    }
+
+    pub async fn unlink(&self, paper: &str, collection: &str) {
+        self.crr
+            .db()
+            .execute(
+                "DELETE FROM paper_collections WHERE paper_id = ?1 AND collection_id = ?2",
+                vec![
+                    Value::Text(paper.to_string()),
+                    Value::Text(collection.to_string()),
+                ],
+            )
+            .await
+            .unwrap();
+        let pk = format!("{paper}:{collection}");
+        self.crr
+            .track_delete("paper_collections", &pk)
+            .await
+            .unwrap();
+    }
+
+    pub async fn link_exists(&self, paper: &str, collection: &str) -> bool {
+        let rows = self
+            .crr
+            .db()
+            .query(
+                "SELECT 1 FROM paper_collections WHERE paper_id = ?1 AND collection_id = ?2",
+                vec![
+                    Value::Text(paper.to_string()),
+                    Value::Text(collection.to_string()),
+                ],
+            )
+            .await
+            .unwrap();
+        !rows.is_empty()
     }
 
     pub async fn changes(&self) -> Vec<ChangeRow> {

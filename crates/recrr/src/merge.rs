@@ -94,9 +94,15 @@ impl<D: Db> Crr<D> {
                     if change.cl % 2 == 0 {
                         // The column belongs to an already-deleted row (even CL,
                         // e.g. a row inserted and deleted before its first sync).
-                        // Do not resurrect it as a skeleton — skip the column.
+                        // Do not resurrect it as a skeleton — the row stays gone.
                         // Existence converges to "absent" regardless of whether
                         // the column or the sentinel arrives first.
+                        //
+                        // The column clock is intentionally NOT recorded: a dead
+                        // row's column clocks are never read (a resurrect zeroes
+                        // them first via `zero_column_clocks`), so they can't
+                        // affect observable state. Recording them would only add
+                        // work in the merge hot path.
                         result.skipped += 1;
                         continue;
                     }
