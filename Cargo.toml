@@ -1,0 +1,22 @@
+[workspace]
+members = ["crates/recrr"]
+resolver = "2"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/PoHsuanLai/recrr"
+authors = ["PoHsuan Lai"]
+rust-version = "1.80"
+
+[workspace.dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+async-trait = "0.1"
+thiserror = "2"
+base64 = "0.22"
+chrono = "0.4"
+tokio = { version = "1", features = ["macros", "rt"] }
+turso = "0.6.0-pre.15"
+rusqlite = { version = "0.32", features = ["bundled"] }

@@ -1,0 +1,50 @@
+[package]
+name = "recrr"
+description = "Relational CRDT: per-column last-write-wins sync for any SQL database, with causal-length delete/resurrect tracking. Serverless, peer-to-peer, offline-first."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+rust-version.workspace = true
+readme = "../../README.md"
+keywords = ["crdt", "sync", "sqlite", "offline-first", "replication"]
+categories = ["database", "data-structures"]
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+async-trait = { workspace = true }
+thiserror = { workspace = true }
+base64 = { workspace = true }
+chrono = { workspace = true, optional = true }
+
+# Backend drivers — each gated behind its own feature.
+turso = { workspace = true, optional = true }
+rusqlite = { workspace = true, optional = true }
+
+[features]
+default = ["chrono"]
+# Enables `SkeletonValue::NowRfc3339` for timestamp defaults in skeleton rows.
+chrono = ["dep:chrono"]
+# Backend: turso (pure-Rust SQLite). Provides `backends::TursoDb`.
+turso = ["dep:turso"]
+# Backend: rusqlite (bundled C SQLite). Provides `backends::SqliteDb`.
+rusqlite = ["dep:rusqlite"]
+
+[dev-dependencies]
+tokio = { workspace = true }
+
+# Convergence tests run against the rusqlite backend.
+[[test]]
+name = "convergence"
+required-features = ["rusqlite"]
+
+[[example]]
+name = "two_devices"
+required-features = ["rusqlite"]
+
+[package.metadata.docs.rs]
+# Document every backend on docs.rs.
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]
