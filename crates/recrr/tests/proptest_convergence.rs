@@ -21,6 +21,13 @@
 //! no tracked columns). A tight key space plus frequent inserts/deletes makes
 //! conflicts, and multi-cycle insert→delete→resurrect→edit sequences, common.
 //!
+//! Sync is modelled two ways: full one-way delivery, and **lossy** delivery that
+//! drops a deterministic subset of a changeset (a truncated `.crr` file / dropped
+//! CloudKit record). Convergence is asserted only after a final *complete*
+//! gossip-to-fixpoint — a CRDT must tolerate partial/out-of-order intermediate
+//! delivery so long as every change eventually arrives. Runs across **5**
+//! replicas to stress multi-party concurrent conflict.
+//!
 //! All run against the real in-memory rusqlite backend.
 
 mod support;
@@ -48,7 +55,8 @@ fn block_on<F: std::future::Future>(fut: F) -> F::Output {
 // --- generated program -------------------------------------------------------
 
 /// Small domains keep the key/value space tight so conflicts happen often.
-const N_DEVICES: u8 = 3;
+/// Five replicas (not three) stresses multi-party concurrent conflict harder.
+const N_DEVICES: u8 = 5;
 const N_PKS: u8 = 3; // shared id space: papers p0..p2, collections c0..c2
 const N_VALS: u8 = 4; // small value domain -> frequent equal-value ties
 
@@ -73,6 +81,9 @@ enum Op {
     Unlink { device: u8, paper: u8, collection: u8 },
     // gossip
     Sync { from: u8, to: u8 },
+    /// Deliver only a subset of the changeset (models a truncated `.crr` file /
+    /// dropped record). `drop_seed` deterministically selects which changes drop.
+    LossySync { from: u8, to: u8, drop_seed: u32 },
 }
 
 fn op_strategy() -> impl Strategy<Value = Op> {
@@ -103,6 +114,11 @@ fn op_strategy() -> impl Strategy<Value = Op> {
             collection
         }),
         (dev(), dev()).prop_map(|(from, to)| Op::Sync { from, to }),
+        (dev(), dev(), any::<u32>()).prop_map(|(from, to, drop_seed)| Op::LossySync {
+            from,
+            to,
+            drop_seed
+        }),
     ]
 }
 
@@ -245,6 +261,25 @@ impl World {
             Op::Sync { from, to } => {
                 if from != to {
                     support::sync(self.dev(*from), self.dev(*to)).await;
+                }
+            }
+            Op::LossySync {
+                from,
+                to,
+                drop_seed,
+            } => {
+                if from != to {
+                    let seed = *drop_seed;
+                    // Keep each change with a deterministic ~50% chance derived
+                    // from (seed, index) — a cheap integer hash, no RNG.
+                    support::sync_lossy(self.dev(*from), self.dev(*to), move |i| {
+                        let mut h = seed ^ (i as u32).wrapping_mul(0x9E3779B1);
+                        h ^= h >> 15;
+                        h = h.wrapping_mul(0x85EBCA77);
+                        h ^= h >> 13;
+                        h & 1 == 0
+                    })
+                    .await;
                 }
             }
         }

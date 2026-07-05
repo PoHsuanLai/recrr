@@ -400,3 +400,22 @@ pub async fn sync(src: &Device, dst: &Device) {
     let changes = src.changes().await;
     dst.apply(&changes).await;
 }
+
+/// One-way *lossy* sync: deliver only a deterministic subset of `src`'s
+/// changeset to `dst`, modelling a truncated `.crr` file or a dropped CloudKit
+/// record. `keep` decides, per change (by index), whether it is delivered — a
+/// pure function of the caller's seed so failures replay deterministically.
+///
+/// A CRDT must tolerate this: partial/out-of-order delivery may leave `dst`
+/// transiently inconsistent, but a later *complete* delivery (e.g. the final
+/// gossip-to-fixpoint, which always ships full changesets) must still converge.
+pub async fn sync_lossy(src: &Device, dst: &Device, keep: impl Fn(usize) -> bool) {
+    let changes = src.changes().await;
+    let subset: Vec<ChangeRow> = changes
+        .into_iter()
+        .enumerate()
+        .filter(|(i, _)| keep(*i))
+        .map(|(_, c)| c)
+        .collect();
+    dst.apply(&subset).await;
+}
