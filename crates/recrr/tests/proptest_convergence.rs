@@ -65,25 +65,76 @@ const N_VALS: u8 = 4; // small value domain -> frequent equal-value ties
 #[derive(Debug, Clone)]
 enum Op {
     // papers (single PK, all column types)
-    InsertPaper { device: u8, pk: u8 },
-    SetTitle { device: u8, pk: u8, val: u8 },
-    SetAuthors { device: u8, pk: u8, val: u8 },
-    SetFav { device: u8, pk: u8, val: bool },
-    SetCitationCount { device: u8, pk: u8, val: Option<u8> }, // None -> NULL
-    SetCover { device: u8, pk: u8, val: u8 },                 // blob column
-    DeletePaper { device: u8, pk: u8 },
+    InsertPaper {
+        device: u8,
+        pk: u8,
+    },
+    SetTitle {
+        device: u8,
+        pk: u8,
+        val: u8,
+    },
+    SetAuthors {
+        device: u8,
+        pk: u8,
+        val: u8,
+    },
+    SetFav {
+        device: u8,
+        pk: u8,
+        val: bool,
+    },
+    SetCitationCount {
+        device: u8,
+        pk: u8,
+        val: Option<u8>,
+    }, // None -> NULL
+    SetCover {
+        device: u8,
+        pk: u8,
+        val: u8,
+    }, // blob column
+    DeletePaper {
+        device: u8,
+        pk: u8,
+    },
     // collections (a second single-PK table)
-    InsertCollection { device: u8, pk: u8 },
-    SetCollectionName { device: u8, pk: u8, val: u8 },
-    DeleteCollection { device: u8, pk: u8 },
+    InsertCollection {
+        device: u8,
+        pk: u8,
+    },
+    SetCollectionName {
+        device: u8,
+        pk: u8,
+        val: u8,
+    },
+    DeleteCollection {
+        device: u8,
+        pk: u8,
+    },
     // paper_collections (composite PK, no tracked columns)
-    Link { device: u8, paper: u8, collection: u8 },
-    Unlink { device: u8, paper: u8, collection: u8 },
+    Link {
+        device: u8,
+        paper: u8,
+        collection: u8,
+    },
+    Unlink {
+        device: u8,
+        paper: u8,
+        collection: u8,
+    },
     // gossip
-    Sync { from: u8, to: u8 },
+    Sync {
+        from: u8,
+        to: u8,
+    },
     /// Deliver only a subset of the changeset (models a truncated `.crr` file /
     /// dropped record). `drop_seed` deterministically selects which changes drop.
-    LossySync { from: u8, to: u8, drop_seed: u32 },
+    LossySync {
+        from: u8,
+        to: u8,
+        drop_seed: u32,
+    },
 }
 
 fn op_strategy() -> impl Strategy<Value = Op> {
@@ -100,8 +151,11 @@ fn op_strategy() -> impl Strategy<Value = Op> {
         (dev(), pk(), val()).prop_map(|(device, pk, val)| Op::SetCover { device, pk, val }),
         (dev(), pk()).prop_map(|(device, pk)| Op::DeletePaper { device, pk }),
         (dev(), pk()).prop_map(|(device, pk)| Op::InsertCollection { device, pk }),
-        (dev(), pk(), val())
-            .prop_map(|(device, pk, val)| Op::SetCollectionName { device, pk, val }),
+        (dev(), pk(), val()).prop_map(|(device, pk, val)| Op::SetCollectionName {
+            device,
+            pk,
+            val
+        }),
         (dev(), pk()).prop_map(|(device, pk)| Op::DeleteCollection { device, pk }),
         (dev(), pk(), pk()).prop_map(|(device, paper, collection)| Op::Link {
             device,
