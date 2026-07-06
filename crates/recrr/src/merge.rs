@@ -1,7 +1,7 @@
 //! LWW merge logic for applying remote changes.
 
 use crate::db::{Db, Error, Value};
-use crate::helpers::compare_json_values;
+use crate::helpers::{clock_table, compare_json_values};
 use crate::schema::PkSpec;
 use crate::{ChangeRow, Crr, MergeResult, SENTINEL};
 
@@ -10,9 +10,47 @@ impl<D: Db> Crr<D> {
     ///
     /// Idempotent and order-independent: applying the same changes twice, or in a
     /// different order, converges to the same state. Unknown tables/columns
-    /// (per the [`Schema`](crate::Schema)) are skipped rather than trusted.
+    /// (per the [`Schema`](crate::Schema)) are skipped rather than trusted, and
+    /// counted in [`MergeResult::skipped_unknown`].
+    ///
+    /// This is the raw entry point; prefer [`apply_changeset`](Self::apply_changeset)
+    /// when the sender provides a [`Changeset`](crate::Changeset) envelope, to also
+    /// learn the peer's schema identity on a mismatch.
     pub async fn apply_changes(&self, changes: &[ChangeRow]) -> Result<MergeResult, Error> {
         let mut result = MergeResult::default();
+        self.apply_rows_inner(changes, &mut result).await?;
+        Ok(result)
+    }
+
+    /// Apply a versioned [`Changeset`](crate::Changeset) envelope.
+    ///
+    /// Behaves exactly like [`apply_changes`](Self::apply_changes) for the merge
+    /// itself (same shared core, so convergence semantics can never drift between
+    /// the two entry points), and additionally records the sender's schema
+    /// identity in [`MergeResult::peer_schema`] whenever it differs from ours —
+    /// turning a silent cross-version skip into an actionable signal. The merge
+    /// still applies every change it *can*; only genuinely-unknown ones are
+    /// skipped (and counted in [`MergeResult::skipped_unknown`]).
+    pub async fn apply_changeset(
+        &self,
+        changeset: &crate::Changeset,
+    ) -> Result<MergeResult, Error> {
+        let mut result = MergeResult::default();
+        self.apply_rows_inner(&changeset.rows, &mut result).await?;
+        let local_fp = self.schema.fingerprint();
+        if changeset.fingerprint != local_fp {
+            result.peer_schema = Some((changeset.schema_version, changeset.fingerprint));
+        }
+        Ok(result)
+    }
+
+    /// The shared merge core behind both [`apply_changes`](Self::apply_changes)
+    /// and [`apply_changeset`](Self::apply_changeset). Mutates `result` in place.
+    async fn apply_rows_inner(
+        &self,
+        changes: &[ChangeRow],
+        result: &mut MergeResult,
+    ) -> Result<(), Error> {
         let _local_site = self.site_id().await?;
 
         for change in changes {
@@ -20,11 +58,11 @@ impl<D: Db> Crr<D> {
                 .schema
                 .is_valid_column(&change.table_name, &change.col_name)
             {
-                result.skipped += 1;
+                result.skipped_unknown += 1;
                 continue;
             }
 
-            let clock_table = format!("{}__crr_clock", change.table_name);
+            let clock_table = clock_table(&change.table_name);
 
             if change.col_name == SENTINEL {
                 let local_cl = self.get_col_ver(&clock_table, &change.pk, SENTINEL).await;
@@ -196,7 +234,7 @@ impl<D: Db> Crr<D> {
             }
         }
 
-        Ok(result)
+        Ok(())
     }
 
     /// Delete a row by primary key, respecting the table's [`PkSpec`].

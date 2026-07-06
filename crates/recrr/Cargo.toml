@@ -46,8 +46,17 @@ required-features = ["rusqlite"]
 name = "proptest_convergence"
 required-features = ["rusqlite"]
 
+# Schema-migration tests (primitives + versioned envelope).
+[[test]]
+name = "migration"
+required-features = ["rusqlite"]
+
 [[example]]
 name = "two_devices"
+required-features = ["rusqlite"]
+
+[[example]]
+name = "migration"
 required-features = ["rusqlite"]
 
 [package.metadata.docs.rs]

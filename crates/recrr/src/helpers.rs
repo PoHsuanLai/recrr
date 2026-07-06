@@ -11,6 +11,14 @@ use crate::{Crr, SENTINEL};
 /// for plain text. Non-blob values are unaffected.
 const BLOB_TAG: &str = "$blob";
 
+/// The name of the shadow clock table for a tracked table.
+///
+/// The single source of truth for the `{table}__crr_clock` naming convention,
+/// reused by tracking, merge, and migration code.
+pub(crate) fn clock_table(table: &str) -> String {
+    format!("{table}__crr_clock")
+}
+
 impl<D: Db> Crr<D> {
     /// Returns (col_ver, site_id) for a clock entry, or (0, empty) if not found.
     pub(crate) async fn get_clock_entry(
