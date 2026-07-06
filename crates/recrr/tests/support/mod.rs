@@ -11,7 +11,7 @@
 #![allow(dead_code)]
 
 use recrr::backends::SqliteDb;
-use recrr::{ChangeRow, Crr, Db, PkSpec, Schema, SkeletonValue, TableSpec, Value};
+use recrr::{ChangeRow, Crdt, Crr, Db, Schema, Value};
 
 /// Open a fresh in-memory database with the application tables created.
 pub async fn new_db() -> SqliteDb {
@@ -53,56 +53,70 @@ const APP_SCHEMA_STMTS: &[&str] = &[
     )",
 ];
 
-/// The [`Schema`] matching the application tables, mirroring how an app configures recrr.
-pub fn test_schema() -> Schema {
-    Schema::new(vec![
-        TableSpec::new(
-            "papers",
-            [
-                "title",
-                "authors",
-                "is_favorite",
-                "is_read",
-                "date_added",
-                "date_modified",
-                "citation_count",
-                "cover",
-                "notes",
-            ],
-        )
-        .with_skeleton([
-            ("title", SkeletonValue::Literal(Value::Text(String::new()))),
-            (
-                "authors",
-                SkeletonValue::Literal(Value::Text("[]".to_string())),
-            ),
-            ("is_favorite", SkeletonValue::Literal(Value::Integer(0))),
-            ("is_read", SkeletonValue::Literal(Value::Integer(0))),
-            ("date_added", SkeletonValue::NowRfc3339),
-            ("date_modified", SkeletonValue::NowRfc3339),
-        ]),
-        TableSpec::new("collections", ["name", "parent_id", "position"]).with_skeleton([
-            ("name", SkeletonValue::Literal(Value::Text(String::new()))),
-            ("position", SkeletonValue::Literal(Value::Integer(0))),
-        ]),
-        TableSpec::new("paper_collections", []).with_pk(PkSpec::composite(
-            "paper_id",
-            "collection_id",
-            ':',
-        )),
-    ])
+// The application tables, derived from structs — mirroring how an app would
+// configure recrr with `#[derive(Crdt)]`. `notes` is tracked from the start but
+// only backfilled once a device runs `migrate_add_notes`.
+#[derive(Crdt)]
+#[crdt(table = "papers")]
+#[allow(dead_code)] // fields drive codegen, not all are read
+pub struct Paper {
+    #[crdt(pk)]
+    id: String,
+    #[crdt(skeleton = "\"\"")]
+    title: String,
+    #[crdt(skeleton = "\"[]\"")]
+    authors: String,
+    #[crdt(skeleton = "0")]
+    is_favorite: i64,
+    #[crdt(skeleton = "0")]
+    is_read: i64,
+    #[crdt(skeleton = "now_rfc3339")]
+    date_added: String,
+    #[crdt(skeleton = "now_rfc3339")]
+    date_modified: String,
+    citation_count: Option<i64>,
+    cover: Option<Vec<u8>>,
+    notes: String,
 }
 
-/// The tracked columns of `papers`, in order — handy for `track_insert`.
+#[derive(Crdt)]
+#[crdt(table = "collections")]
+#[allow(dead_code)]
+pub struct Collection {
+    #[crdt(pk)]
+    id: String,
+    #[crdt(skeleton = "\"\"")]
+    name: String,
+    parent_id: Option<String>,
+    #[crdt(skeleton = "0")]
+    position: i64,
+}
+
+#[derive(Crdt)]
+#[crdt(table = "paper_collections", pk = (paper_id, collection_id; sep = ':'))]
+#[allow(dead_code)]
+pub struct PaperCollection {
+    paper_id: String,
+    collection_id: String,
+}
+
+/// The [`Schema`] matching the application tables, mirroring how an app configures recrr.
+pub fn test_schema() -> Schema {
+    recrr::schema![Paper, Collection, PaperCollection]
+}
+
+/// The tracked columns of `papers` used by `insert_paper` (everything except the
+/// mid-life `notes` column). `Paper::ALL` would include `notes`; this subset
+/// matches what the initial insert actually writes.
 pub const PAPER_COLS: &[&str] = &[
-    "title",
-    "authors",
-    "is_favorite",
-    "is_read",
-    "date_added",
-    "date_modified",
-    "citation_count",
-    "cover",
+    Paper::TITLE,
+    Paper::AUTHORS,
+    Paper::IS_FAVORITE,
+    Paper::IS_READ,
+    Paper::DATE_ADDED,
+    Paper::DATE_MODIFIED,
+    Paper::CITATION_COUNT,
+    Paper::COVER,
 ];
 
 /// A test "device": its own in-memory database + recrr handle. One `Device`
@@ -150,7 +164,7 @@ impl Device {
             .await
             .unwrap();
         self.crr
-            .track_update("papers", id, &["title"])
+            .track_update("papers", id, &[Paper::TITLE])
             .await
             .unwrap();
     }
@@ -165,7 +179,7 @@ impl Device {
             .await
             .unwrap();
         self.crr
-            .track_update("papers", id, &["is_favorite"])
+            .track_update("papers", id, &[Paper::IS_FAVORITE])
             .await
             .unwrap();
     }
@@ -183,7 +197,7 @@ impl Device {
             .await
             .unwrap();
         self.crr
-            .track_update("papers", id, &["authors"])
+            .track_update("papers", id, &[Paper::AUTHORS])
             .await
             .unwrap();
     }
@@ -204,7 +218,7 @@ impl Device {
             .await
             .unwrap();
         self.crr
-            .track_update("papers", id, &["citation_count"])
+            .track_update("papers", id, &[Paper::CITATION_COUNT])
             .await
             .unwrap();
     }
@@ -219,7 +233,7 @@ impl Device {
             .await
             .unwrap();
         self.crr
-            .track_update("papers", id, &["cover"])
+            .track_update("papers", id, &[Paper::COVER])
             .await
             .unwrap();
     }
@@ -236,7 +250,7 @@ impl Device {
             .await
             .unwrap();
         self.crr
-            .track_update("papers", id, &["notes"])
+            .track_update("papers", id, &[Paper::NOTES])
             .await
             .unwrap();
     }
@@ -325,7 +339,7 @@ impl Device {
             .await
             .unwrap();
         self.crr
-            .track_insert("collections", id, &["name", "parent_id", "position"])
+            .track_insert("collections", id, Collection::ALL)
             .await
             .unwrap();
     }
@@ -340,7 +354,7 @@ impl Device {
             .await
             .unwrap();
         self.crr
-            .track_update("collections", id, &["name"])
+            .track_update("collections", id, &[Collection::NAME])
             .await
             .unwrap();
     }
