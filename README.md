@@ -76,9 +76,44 @@ crr.track_update("papers", &id, &["title"]).await?;
 crr.track_delete("papers", &id).await?;
 
 // 4. Sync: pull changes since a watermark, ship them, apply peers' changes.
-let outgoing = crr.changes_since(watermark).await?;   // -> Vec<ChangeRow> (serde)
-let result   = crr.apply_changes(&incoming).await?;   // deterministic merge
+let outgoing = crr.changeset_since(watermark).await?; // -> Changeset (versioned)
+let result   = crr.apply_changeset(&incoming).await?; // deterministic merge
+// result.skipped_unknown / result.peer_schema flag a cross-version peer.
 ```
+
+The raw `changes_since` / `apply_changes` pair still exists (`Vec<ChangeRow>`),
+but prefer the `Changeset` envelope — it carries the sender's schema identity so a
+peer on a different schema is *detected*, not silently dropped.
+
+## Schema migrations
+
+Your app schema evolves. `recrr` keeps its CRDT metadata in step through explicit
+migration primitives — you run your own `ALTER TABLE` (or rename) first, rebind the
+handle to the updated [`Schema`], then call the matching primitive:
+
+```rust
+// Add a tracked column: ALTER first, then backfill clock entries for existing rows
+// so they sync (existing rows would otherwise never emit the new column).
+crr.db().execute("ALTER TABLE papers ADD COLUMN notes TEXT NOT NULL DEFAULT ''", vec![]).await?;
+let crr = crr.with_schema(schema_with_notes);   // rebind to the evolved schema
+crr.migrate_add_column("papers", "notes").await?;
+
+crr.migrate_drop_column("papers", "old_col").await?;   // remove a column's clocks
+crr.migrate_rename_table("papers", "articles").await?; // rename, preserving history
+crr.migrate_change_pk("t", &new_pk, |old| Some(re_encode(old))).await?; // change PK shape
+```
+
+Each primitive bumps `crr.schema_version()` and re-stores the schema fingerprint, so
+peers can tell they're on different versions. Backfill lands new columns at the base
+version and skips deleted rows; if two replicas backfill the *same* cell with
+*different* values, the tie resolves by the usual LWW rules — so use a deterministic
+column default across devices. `migrate_change_pk` refuses mappings that would collide
+two keys or produce a malformed composite key.
+
+**Cross-version peers:** when a peer's [`Changeset`] carries a different fingerprint,
+`apply_changeset` still merges every column it *knows*, and reports the rest in
+`MergeResult { skipped_unknown, peer_schema }` — so a newer peer's edits to columns
+you don't track yet are visibly held back (prompt an upgrade), never silently lost.
 
 See [`examples/two_devices.rs`](crates/recrr/examples/two_devices.rs) for a
 complete offline-edit-then-converge demo:

@@ -25,6 +25,9 @@ pub async fn new_db() -> SqliteDb {
 }
 
 const APP_SCHEMA_STMTS: &[&str] = &[
+    // `notes` exists in the real table from the start but is only *tracked* by
+    // recrr once a device runs `migrate_add_notes` — this models a schema
+    // rollout where the column is added and backfilled mid-life.
     "CREATE TABLE papers (
         id TEXT PRIMARY KEY,
         title TEXT NOT NULL,
@@ -34,7 +37,8 @@ const APP_SCHEMA_STMTS: &[&str] = &[
         date_added TEXT NOT NULL,
         date_modified TEXT NOT NULL,
         citation_count INTEGER,
-        cover BLOB
+        cover BLOB,
+        notes TEXT NOT NULL DEFAULT ''
     )",
     "CREATE TABLE collections (
         id TEXT PRIMARY KEY,
@@ -63,6 +67,7 @@ pub fn test_schema() -> Schema {
                 "date_modified",
                 "citation_count",
                 "cover",
+                "notes",
             ],
         )
         .with_skeleton([
@@ -217,6 +222,48 @@ impl Device {
             .track_update("papers", id, &["cover"])
             .await
             .unwrap();
+    }
+
+    /// Set the `notes` column (only meaningful after `migrate_add_notes`, but the
+    /// generator may call it anytime; it tracks the update regardless).
+    pub async fn set_notes(&self, id: &str, notes: &str) {
+        self.crr
+            .db()
+            .execute(
+                "UPDATE papers SET notes = ?1 WHERE id = ?2",
+                vec![Value::Text(notes.to_string()), Value::Text(id.to_string())],
+            )
+            .await
+            .unwrap();
+        self.crr
+            .track_update("papers", id, &["notes"])
+            .await
+            .unwrap();
+    }
+
+    /// Run the `notes` column migration on this device: backfill clock entries for
+    /// existing live rows so the (already-tracked) column syncs. Idempotent, so
+    /// the generator may issue it more than once per device.
+    pub async fn migrate_add_notes(&self) {
+        self.crr
+            .migrate_add_column("papers", "notes")
+            .await
+            .unwrap();
+    }
+
+    pub async fn notes(&self, id: &str) -> Option<String> {
+        let rows = self
+            .crr
+            .db()
+            .query(
+                "SELECT notes FROM papers WHERE id = ?1",
+                vec![Value::Text(id.to_string())],
+            )
+            .await
+            .unwrap();
+        rows.into_iter()
+            .next()
+            .map(|r| r.get(0).as_text().unwrap_or_default().to_string())
     }
 
     pub async fn delete_paper(&self, id: &str) {

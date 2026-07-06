@@ -30,6 +30,7 @@ mod clock_tables;
 mod db;
 mod helpers;
 mod merge;
+mod migrate;
 mod schema;
 mod state;
 mod tracking;
@@ -62,11 +63,45 @@ pub struct ChangeRow {
     pub cl: i64,
 }
 
+/// A versioned changeset envelope: the changes plus the sender's schema identity.
+///
+/// This is the recommended wire unit between replicas. It carries the sender's
+/// [`Schema`] version and fingerprint alongside the raw [`ChangeRow`]s, so the
+/// receiver can detect a schema mismatch (a peer tracking a different set of
+/// tables/columns) instead of silently dropping changes it doesn't recognize.
+///
+/// It is a superset of the older `Vec<ChangeRow>` payload: `rows` is exactly what
+/// [`Crr::changes_since`] returns, so a peer that only understands the raw vector
+/// can still consume `changeset.rows` directly.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Changeset {
+    /// The sender's schema migration version (see [`Crr::schema_version`]).
+    pub schema_version: i64,
+    /// The sender's schema fingerprint (see [`Schema::fingerprint`]).
+    pub fingerprint: u64,
+    /// The column-level changes, identical to [`Crr::changes_since`]'s output.
+    pub rows: Vec<ChangeRow>,
+}
+
 /// Summary of a merge operation: how many changes were applied vs. skipped.
-#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct MergeResult {
+    /// Changes that won their LWW merge and were written.
     pub applied: usize,
+    /// Changes that lost their LWW merge (a newer local value already won). This
+    /// is normal convergence, not data loss.
     pub skipped: usize,
+    /// Changes skipped because their table/column is unknown to the *local*
+    /// schema — i.e. the sender tracks something we do not. Unlike `skipped`,
+    /// this signals a schema mismatch worth surfacing to the user (e.g. "peer is
+    /// on a newer version; upgrade to receive these edits"). Non-zero here means
+    /// the peer's data for those columns is being ignored, deliberately and
+    /// visibly, rather than silently lost.
+    pub skipped_unknown: usize,
+    /// The sender's `(schema_version, fingerprint)` when applied via
+    /// [`Crr::apply_changeset`] and it differed from ours; `None` when the
+    /// schemas matched or the raw [`Crr::apply_changes`] path was used.
+    pub peer_schema: Option<(i64, u64)>,
 }
 
 /// A change-tracking and merge handle bound to a [`Db`] and a [`Schema`].
@@ -92,5 +127,18 @@ impl<D: Db> Crr<D> {
     /// The schema this handle tracks.
     pub fn schema(&self) -> &Schema {
         &self.schema
+    }
+
+    /// Consume this handle and rebind the same database to a new [`Schema`].
+    ///
+    /// The typical migration flow: after running your real-table DDL, rebuild the
+    /// handle with the evolved schema, then call the matching `migrate_*`
+    /// primitive so the CRDT metadata catches up. Reuses the same underlying `D`,
+    /// so no reconnection is needed.
+    pub fn with_schema(self, schema: Schema) -> Self {
+        Self {
+            db: self.db,
+            schema,
+        }
     }
 }

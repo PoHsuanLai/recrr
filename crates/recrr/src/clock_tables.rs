@@ -57,7 +57,7 @@ impl<D: Db> Crr<D> {
 
         for table in &self.schema.tables {
             let sql = format!(
-                "CREATE TABLE IF NOT EXISTS {}__crr_clock (
+                "CREATE TABLE IF NOT EXISTS {} (
                     pk       TEXT NOT NULL,
                     col_name TEXT NOT NULL,
                     col_ver  INTEGER NOT NULL,
@@ -66,10 +66,15 @@ impl<D: Db> Crr<D> {
                     seq      INTEGER NOT NULL,
                     PRIMARY KEY (pk, col_name)
                 )",
-                table.name
+                crate::helpers::clock_table(&table.name)
             );
             self.db.execute(&sql, vec![]).await?;
         }
+
+        // Persist the schema fingerprint so cross-version peers can be detected
+        // and so migrations can bump it.
+        self.store_schema_fingerprint().await?;
+
         Ok(())
     }
 }

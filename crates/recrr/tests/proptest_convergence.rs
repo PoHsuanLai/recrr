@@ -94,6 +94,16 @@ enum Op {
         pk: u8,
         val: u8,
     }, // blob column
+    SetNotes {
+        device: u8,
+        pk: u8,
+        val: u8,
+    }, // the migrated-in column
+    /// Backfill the `notes` column's clock metadata on one device (models a
+    /// per-device schema migration rollout). Idempotent.
+    MigrateAddNotes {
+        device: u8,
+    },
     DeletePaper {
         device: u8,
         pk: u8,
@@ -149,6 +159,8 @@ fn op_strategy() -> impl Strategy<Value = Op> {
         (dev(), pk(), proptest::option::of(val()))
             .prop_map(|(device, pk, val)| Op::SetCitationCount { device, pk, val }),
         (dev(), pk(), val()).prop_map(|(device, pk, val)| Op::SetCover { device, pk, val }),
+        (dev(), pk(), val()).prop_map(|(device, pk, val)| Op::SetNotes { device, pk, val }),
+        dev().prop_map(|device| Op::MigrateAddNotes { device }),
         (dev(), pk()).prop_map(|(device, pk)| Op::DeletePaper { device, pk }),
         (dev(), pk()).prop_map(|(device, pk)| Op::InsertCollection { device, pk }),
         (dev(), pk(), val()).prop_map(|(device, pk, val)| Op::SetCollectionName {
@@ -262,6 +274,17 @@ impl World {
                     d.set_cover(&id, &blob_val(*val)).await;
                 }
             }
+            Op::SetNotes { device, pk, val } => {
+                let d = self.dev(*device);
+                let id = paper_id(*pk);
+                if d.paper_exists(&id).await {
+                    d.set_notes(&id, &text_val(*val)).await;
+                }
+            }
+            Op::MigrateAddNotes { device } => {
+                // Backfill is safe to run anytime and idempotent.
+                self.dev(*device).migrate_add_notes().await;
+            }
             Op::DeletePaper { device, pk } => {
                 let d = self.dev(*device);
                 let id = paper_id(*pk);
@@ -374,7 +397,7 @@ impl World {
 /// A paper's fully-observable tracked columns, blob included. Excludes the
 /// `date_*` columns, whose skeleton defaults use `NowRfc3339` (wall clock) and
 /// would inject nondeterminism into the compare.
-type PaperRow = (String, String, i64, Option<i64>, Option<Vec<u8>>); // title, authors, fav, cites, cover
+type PaperRow = (String, String, i64, Option<i64>, Option<Vec<u8>>, String); // title, authors, fav, cites, cover, notes
 
 /// The full observable state of one replica across all three tables.
 #[derive(Debug, PartialEq, Eq)]
@@ -390,7 +413,7 @@ async fn observable_state(d: &Device) -> State {
     let mut papers = BTreeMap::new();
     let rows = db
         .query(
-            "SELECT id, title, authors, is_favorite, citation_count, cover FROM papers",
+            "SELECT id, title, authors, is_favorite, citation_count, cover, notes FROM papers",
             vec![],
         )
         .await
@@ -402,7 +425,8 @@ async fn observable_state(d: &Device) -> State {
         let fav = r.get(3).as_integer().unwrap_or(0);
         let cites = r.get(4).as_integer();
         let cover = r.get(5).as_blob().map(|b| b.to_vec());
-        papers.insert(id, (title, authors, fav, cites, cover));
+        let notes = r.get(6).as_text().unwrap_or_default().to_string();
+        papers.insert(id, (title, authors, fav, cites, cover, notes));
     }
 
     let mut collections = BTreeMap::new();
@@ -583,6 +607,44 @@ proptest! {
             let state_b = observable_state(&b).await;
 
             prop_assert_eq!(state_a, state_b, "apply order changed the converged state");
+            Ok(())
+        })?;
+    }
+
+    // 6: migration commutes with sync-to-fixpoint. Replaying a program then
+    // migrating-all-then-gossiping must converge to the SAME observable + clock
+    // state as gossiping-first-then-migrating-all-then-gossiping. If backfill
+    // wrote a wrong col_ver/db_ver, these two paths would diverge (the harness
+    // also compares clock metadata, so a metadata-only divergence still fails).
+    #[test]
+    fn prop_migration_commutes(ops in program_strategy()) {
+        block_on(async {
+            // Path A: run program, migrate every device, then gossip to fixpoint.
+            let a = World::new(N_DEVICES).await;
+            for op in &ops { a.apply_op(op).await; }
+            for i in 0..N_DEVICES { a.dev(i).migrate_add_notes().await; }
+            a.gossip_to_fixpoint().await;
+
+            // Path B: run program, gossip, THEN migrate every device, gossip again.
+            let b = World::new(N_DEVICES).await;
+            for op in &ops { b.apply_op(op).await; }
+            b.gossip_to_fixpoint().await;
+            for i in 0..N_DEVICES { b.dev(i).migrate_add_notes().await; }
+            b.gossip_to_fixpoint().await;
+
+            // Both worlds must be internally converged AND agree with each other.
+            let a0 = observable_state(a.dev(0)).await;
+            let b0 = observable_state(b.dev(0)).await;
+            prop_assert_eq!(&a0, &b0, "migrate-then-sync diverged from sync-then-migrate");
+
+            let a0c = clock_state(a.dev(0)).await;
+            for i in 1..N_DEVICES {
+                prop_assert_eq!(&a0, &observable_state(a.dev(i)).await, "path A replica {} diverged", i);
+                prop_assert_eq!(&a0c, &clock_state(a.dev(i)).await, "path A clock {} diverged", i);
+            }
+            for i in 0..N_DEVICES {
+                prop_assert_eq!(&b0, &observable_state(b.dev(i)).await, "path B replica {} diverged", i);
+            }
             Ok(())
         })?;
     }

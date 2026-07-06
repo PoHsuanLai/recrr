@@ -1,6 +1,7 @@
 //! Change tracking: called after each mutation to record changes for sync.
 
 use crate::db::{Db, Error, Value};
+use crate::helpers::clock_table;
 use crate::{ChangeRow, Crr, SENTINEL};
 
 impl<D: Db> Crr<D> {
@@ -11,7 +12,7 @@ impl<D: Db> Crr<D> {
     pub async fn track_insert(&self, table: &str, pk: &str, columns: &[&str]) -> Result<(), Error> {
         let site = self.site_id().await?;
         let db_ver = self.next_db_version().await?;
-        let clock_table = format!("{table}__crr_clock");
+        let clock_table = clock_table(table);
 
         // Sentinel marks row as alive (CL=1, odd).
         self.db
@@ -58,7 +59,7 @@ impl<D: Db> Crr<D> {
     ) -> Result<(), Error> {
         let site = self.site_id().await?;
         let db_ver = self.next_db_version().await?;
-        let clock_table = format!("{table}__crr_clock");
+        let clock_table = clock_table(table);
 
         for (i, col) in changed_columns.iter().enumerate() {
             let current_ver = self.get_col_ver(&clock_table, pk, col).await;
@@ -87,7 +88,7 @@ impl<D: Db> Crr<D> {
     pub async fn track_delete(&self, table: &str, pk: &str) -> Result<(), Error> {
         let site = self.site_id().await?;
         let db_ver = self.next_db_version().await?;
-        let clock_table = format!("{table}__crr_clock");
+        let clock_table = clock_table(table);
 
         let current_cl = self.get_col_ver(&clock_table, pk, SENTINEL).await;
         let new_cl = if current_cl % 2 == 1 {
@@ -117,12 +118,26 @@ impl<D: Db> Crr<D> {
         Ok(())
     }
 
+    /// Read all changes since a given db_version, wrapped in a versioned
+    /// [`Changeset`](crate::Changeset) envelope carrying this replica's schema
+    /// identity. Prefer this over [`changes_since`](Self::changes_since) so the
+    /// receiver can detect a schema mismatch via
+    /// [`apply_changeset`](Self::apply_changeset).
+    pub async fn changeset_since(&self, since_db_ver: i64) -> Result<crate::Changeset, Error> {
+        let rows = self.changes_since(since_db_ver).await?;
+        Ok(crate::Changeset {
+            schema_version: self.schema_version().await,
+            fingerprint: self.schema.fingerprint(),
+            rows,
+        })
+    }
+
     /// Read all changes since a given db_version, ready to send to peers.
     pub async fn changes_since(&self, since_db_ver: i64) -> Result<Vec<ChangeRow>, Error> {
         let mut all_changes = Vec::new();
 
         for table in &self.schema.tables {
-            let clock_table = format!("{}__crr_clock", table.name);
+            let clock_table = clock_table(&table.name);
 
             let sql = format!(
                 "SELECT pk, col_name, col_ver, db_ver, site_id, seq

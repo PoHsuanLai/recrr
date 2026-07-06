@@ -33,6 +33,66 @@ impl Schema {
             None => false,
         }
     }
+
+    /// A stable, order-insensitive fingerprint of this schema's *structure*:
+    /// its tables, their tracked columns, and each table's primary-key shape.
+    ///
+    /// Two schemas with the same tables/columns/pk shapes produce the same
+    /// fingerprint regardless of the order they were declared in. Skeleton
+    /// defaults are *not* part of the fingerprint — they affect only how a local
+    /// placeholder row is seeded, never what data is synced, so two replicas may
+    /// legitimately differ on them without being "different schemas".
+    ///
+    /// Used to detect cross-version peers: a differing fingerprint on an incoming
+    /// [`Changeset`](crate::Changeset) means the sender tracks a different set of
+    /// columns/tables than we do. The hash is a plain FNV-1a over a canonical
+    /// string so it is reproducible across platforms and crate versions (unlike
+    /// `std`'s `DefaultHasher`, whose output is not guaranteed stable).
+    pub fn fingerprint(&self) -> u64 {
+        let mut tables: Vec<&TableSpec> = self.tables.iter().collect();
+        tables.sort_by(|a, b| a.name.cmp(&b.name));
+
+        let mut canon = String::new();
+        for t in tables {
+            canon.push_str(&t.name);
+            canon.push('|');
+            match &t.pk {
+                PkSpec::Single { column } => {
+                    canon.push_str("s:");
+                    canon.push_str(column);
+                }
+                PkSpec::Composite { columns, sep } => {
+                    canon.push_str("c:");
+                    canon.push_str(&columns.0);
+                    canon.push(',');
+                    canon.push_str(&columns.1);
+                    canon.push(',');
+                    canon.push(*sep);
+                }
+            }
+            canon.push('|');
+            let mut cols: Vec<&String> = t.columns.iter().collect();
+            cols.sort();
+            for c in cols {
+                canon.push_str(c);
+                canon.push(',');
+            }
+            canon.push(';');
+        }
+
+        fnv1a(canon.as_bytes())
+    }
+}
+
+/// FNV-1a 64-bit hash — small, dependency-free, and stable across platforms and
+/// crate versions (required for a fingerprint that peers must agree on).
+fn fnv1a(bytes: &[u8]) -> u64 {
+    let mut hash: u64 = 0xcbf29ce484222325;
+    for &b in bytes {
+        hash ^= b as u64;
+        hash = hash.wrapping_mul(0x100000001b3);
+    }
+    hash
 }
 
 /// How a table's primary key is represented in a [`ChangeRow`]'s `pk` field.
