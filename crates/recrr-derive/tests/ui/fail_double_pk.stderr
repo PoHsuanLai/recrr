@@ -1,0 +1,5 @@
+error: a struct cannot have both a #[crdt(pk)] field and a composite pk = (...)
+ --> tests/ui/fail_double_pk.rs:5:31
+  |
+5 | #[crdt(table = "papers", pk = (a, b; sep = ':'))]
+  |                               ^^^^^^^^^^^^^^^^^

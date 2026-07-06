@@ -9,24 +9,29 @@
 //! instead of silently never emitting it. Finally the devices converge on `color`.
 
 use recrr::backends::SqliteDb;
-use recrr::{Crr, Db, PkSpec, Schema, SkeletonValue, TableSpec, Value};
+use recrr::{Crdt, Crr, Db, Schema, Value};
 
-fn schema_v1() -> Schema {
-    Schema::new(vec![TableSpec::new("notes", ["body"])
-        .with_pk(PkSpec::single("id"))
-        .with_skeleton([(
-            "body",
-            SkeletonValue::Literal(Value::Text(String::new())),
-        )])])
+// The schema is derived from a struct, and it *evolves*: v2 adds a `color`
+// column. Deriving both versions makes the change self-documenting.
+#[derive(Crdt)]
+#[crdt(table = "notes")]
+#[allow(dead_code)]
+struct NoteV1 {
+    #[crdt(pk)]
+    id: String,
+    #[crdt(skeleton = "\"\"")]
+    body: String,
 }
 
-fn schema_v2() -> Schema {
-    Schema::new(vec![TableSpec::new("notes", ["body", "color"])
-        .with_pk(PkSpec::single("id"))
-        .with_skeleton([(
-            "body",
-            SkeletonValue::Literal(Value::Text(String::new())),
-        )])])
+#[derive(Crdt)]
+#[crdt(table = "notes")]
+#[allow(dead_code)]
+struct NoteV2 {
+    #[crdt(pk)]
+    id: String,
+    #[crdt(skeleton = "\"\"")]
+    body: String,
+    color: String,
 }
 
 async fn open_device() -> Crr<SqliteDb> {
@@ -37,7 +42,7 @@ async fn open_device() -> Crr<SqliteDb> {
     )
     .await
     .unwrap();
-    let crr = Crr::new(db, schema_v1());
+    let crr = Crr::new(db, Schema::of::<NoteV1>());
     crr.init().await.unwrap();
     crr
 }
@@ -50,7 +55,7 @@ async fn add_note(crr: &Crr<SqliteDb>, id: &str, body: &str) {
         )
         .await
         .unwrap();
-    crr.track_insert("notes", id, &["body"]).await.unwrap();
+    crr.track_insert("notes", id, NoteV1::ALL).await.unwrap();
 }
 
 async fn set_color(crr: &Crr<SqliteDb>, id: &str, color: &str) {
@@ -61,7 +66,9 @@ async fn set_color(crr: &Crr<SqliteDb>, id: &str, color: &str) {
         )
         .await
         .unwrap();
-    crr.track_update("notes", id, &["color"]).await.unwrap();
+    crr.track_update("notes", id, &[NoteV2::COLOR])
+        .await
+        .unwrap();
 }
 
 async fn read_color(crr: &Crr<SqliteDb>, id: &str) -> Option<String> {
@@ -87,8 +94,10 @@ async fn migrate_to_v2(crr: Crr<SqliteDb>) -> Crr<SqliteDb> {
         )
         .await
         .unwrap();
-    let crr = crr.with_schema(schema_v2());
-    crr.migrate_add_column("notes", "color").await.unwrap();
+    let crr = crr.with_schema(Schema::of::<NoteV2>());
+    crr.migrate_add_column("notes", NoteV2::COLOR)
+        .await
+        .unwrap();
     println!("  migrated to schema v{}", crr.schema_version().await);
     crr
 }

@@ -52,4 +52,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - name: cargo publish --dry-run
-        run: cargo publish -p recrr --all-features --dry-run
+        # Publish the whole workspace so the `recrr` -> `recrr-derive` path/version
+        # dependency resolves against the sibling crate (not yet on crates.io):
+        # cargo packages `recrr-derive` first, then verifies `recrr` against it.
+        run: cargo publish --workspace --all-features --dry-run

@@ -13,10 +13,30 @@ pub struct Schema {
     pub tables: Vec<TableSpec>,
 }
 
+/// A type that describes one tracked table, implemented by `#[derive(Crdt)]`.
+///
+/// The derive generates this from a struct so the [`TableSpec`] is single-sourced
+/// from the type. Build a [`Schema`] from implementors with [`Schema::of`] (one
+/// table) or the [`schema!`](crate::schema) macro (several).
+pub trait CrdtTable {
+    /// The table name (the `#[crdt(table = "...")]` value).
+    const TABLE: &'static str;
+    /// The generated [`TableSpec`] describing this table's columns, pk, and
+    /// skeleton defaults.
+    fn table_spec() -> TableSpec;
+}
+
 impl Schema {
     /// Build a schema from its tables.
     pub fn new(tables: Vec<TableSpec>) -> Self {
         Self { tables }
+    }
+
+    /// A single-table schema for a `#[derive(Crdt)]` type.
+    ///
+    /// For multiple tables use the [`schema!`](crate::schema) macro.
+    pub fn of<T: CrdtTable>() -> Self {
+        Self::new(vec![T::table_spec()])
     }
 
     /// The spec for `table`, if tracked.

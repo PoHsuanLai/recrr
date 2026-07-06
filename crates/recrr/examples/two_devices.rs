@@ -7,16 +7,19 @@
 //! server and no coordination.
 
 use recrr::backends::SqliteDb;
-use recrr::{Crr, Db, PkSpec, Schema, SkeletonValue, TableSpec, Value};
+use recrr::{Crdt, Crr, Db, Schema, Value};
 
-/// The one table we sync: a tiny notes table.
-fn schema() -> Schema {
-    Schema::new(vec![TableSpec::new("notes", ["body"])
-        .with_pk(PkSpec::single("id"))
-        .with_skeleton([(
-            "body",
-            SkeletonValue::Literal(Value::Text(String::new())),
-        )])])
+/// The one table we sync: a tiny notes table. `#[derive(Crdt)]` turns this struct
+/// into the schema, and `Note::BODY` / `Note::ALL` are compile-checked column
+/// references for the `track_*` calls below.
+#[derive(Crdt)]
+#[crdt(table = "notes")]
+#[allow(dead_code)] // fields drive codegen; not all are read at runtime
+struct Note {
+    #[crdt(pk)]
+    id: String,
+    #[crdt(skeleton = "\"\"")]
+    body: String,
 }
 
 async fn open_device() -> Crr<SqliteDb> {
@@ -27,7 +30,7 @@ async fn open_device() -> Crr<SqliteDb> {
     )
     .await
     .unwrap();
-    let crr = Crr::new(db, schema());
+    let crr = Crr::new(db, Schema::of::<Note>());
     crr.init().await.unwrap();
     crr
 }
@@ -42,9 +45,9 @@ async fn write_note(crr: &Crr<SqliteDb>, id: &str, body: &str, is_new: bool) {
         .await
         .unwrap();
     if is_new {
-        crr.track_insert("notes", id, &["body"]).await.unwrap();
+        crr.track_insert("notes", id, Note::ALL).await.unwrap();
     } else {
-        crr.track_update("notes", id, &["body"]).await.unwrap();
+        crr.track_update("notes", id, &[Note::BODY]).await.unwrap();
     }
 }
 

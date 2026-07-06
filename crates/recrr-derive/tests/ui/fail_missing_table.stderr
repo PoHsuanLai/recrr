@@ -1,0 +1,5 @@
+error: #[derive(Crdt)] requires #[crdt(table = "...")] on the struct
+ --> tests/ui/fail_missing_table.rs:4:1
+  |
+4 | struct Paper {
+  | ^^^^^^

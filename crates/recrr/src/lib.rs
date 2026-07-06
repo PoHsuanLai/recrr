@@ -25,6 +25,7 @@
 
 #![cfg_attr(docsrs, feature(doc_cfg))]
 
+mod audit;
 pub mod backends;
 mod clock_tables;
 mod db;
@@ -38,7 +39,43 @@ mod tracking;
 use serde::{Deserialize, Serialize};
 
 pub use db::{Db, Error, Row, Value};
-pub use schema::{PkSpec, Schema, SkeletonValue, TableSpec};
+pub use schema::{CrdtTable, PkSpec, Schema, SkeletonValue, TableSpec};
+
+/// Derive a [`CrdtTable`] impl and typed column constants for a struct.
+///
+/// See the crate README for the full attribute grammar. In brief:
+///
+/// ```ignore
+/// use recrr::Crdt;
+///
+/// #[derive(Crdt)]
+/// #[crdt(table = "papers")]
+/// struct Paper {
+///     #[crdt(pk)]
+///     id: String,
+///     title: String,
+///     #[crdt(rename = "is_favorite")]
+///     favorite: bool,
+/// }
+/// ```
+///
+/// generates `impl CrdtTable for Paper` plus the constants `Paper::TITLE`,
+/// `Paper::FAVORITE` (= `"is_favorite"`), `Paper::ID`, and `Paper::ALL`.
+pub use recrr_derive::Crdt;
+
+/// Build a multi-table [`Schema`] from several `#[derive(Crdt)]` types.
+///
+/// ```ignore
+/// let schema = recrr::schema![Paper, Collection, PaperCollection];
+/// ```
+///
+/// Equivalent to `Schema::new(vec![Paper::table_spec(), ...])`.
+#[macro_export]
+macro_rules! schema {
+    ($($t:ty),+ $(,)?) => {
+        $crate::Schema::new(vec![ $( <$t as $crate::CrdtTable>::table_spec() ),+ ])
+    };
+}
 
 /// The synthetic column name that tracks row existence (causal length).
 pub(crate) const SENTINEL: &str = "__sentinel";

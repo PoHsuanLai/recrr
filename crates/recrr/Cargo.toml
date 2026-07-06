@@ -12,6 +12,7 @@ keywords = ["crdt", "sync", "sqlite", "offline-first", "replication"]
 categories = ["database", "data-structures"]
 
 [dependencies]
+recrr-derive = { path = "../recrr-derive", version = "0.1.0" }
 serde = { workspace = true }
 serde_json = { workspace = true }
 async-trait = { workspace = true }
@@ -51,12 +52,26 @@ required-features = ["rusqlite"]
 name = "migration"
 required-features = ["rusqlite"]
 
+# Derive-macro runtime tests (spec parity, fingerprint interop, round-trip).
+[[test]]
+name = "derive"
+required-features = ["rusqlite"]
+
+# Forgot-to-track audit tests.
+[[test]]
+name = "audit"
+required-features = ["rusqlite"]
+
 [[example]]
 name = "two_devices"
 required-features = ["rusqlite"]
 
 [[example]]
 name = "migration"
+required-features = ["rusqlite"]
+
+[[example]]
+name = "derive"
 required-features = ["rusqlite"]
 
 [package.metadata.docs.rs]
