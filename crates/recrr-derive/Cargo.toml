@@ -1,0 +1,26 @@
+[package]
+name = "recrr-derive"
+description = "Derive macro for recrr: generate a TableSpec and typed column references from a struct."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+rust-version.workspace = true
+readme = "../../README.md"
+keywords = ["crdt", "derive", "macro", "sqlite", "sync"]
+categories = ["database", "rust-patterns"]
+
+[lib]
+proc-macro = true
+
+[dependencies]
+syn = { workspace = true }
+quote = { workspace = true }
+proc-macro2 = { workspace = true }
+
+[dev-dependencies]
+# UI tests need the generated code to reference the real `recrr` types.
+recrr = { path = "../recrr", features = ["rusqlite"] }
+trybuild = { workspace = true }
+tokio = { workspace = true }

@@ -1,0 +1,5 @@
+error: unknown crdt(...) key `bogus` on this field; expected `pk`, `skip`, `rename`, or `skeleton`
+ --> tests/ui/fail_unknown_key.rs:8:12
+  |
+8 |     #[crdt(bogus = "x")]
+  |            ^^^^^

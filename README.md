@@ -85,6 +85,63 @@ The raw `changes_since` / `apply_changes` pair still exists (`Vec<ChangeRow>`),
 but prefer the `Changeset` envelope — it carries the sender's schema identity so a
 peer on a different schema is *detected*, not silently dropped.
 
+## Deriving the schema
+
+`#[derive(Crdt)]` generates the `TableSpec` from a struct and emits
+**compile-checked column references**, so the schema is single-sourced from the
+type and a renamed or mistyped column becomes a *compile* error instead of a
+runtime data-loss bug.
+
+```rust
+use recrr::Crdt;
+
+#[derive(Crdt)]
+#[crdt(table = "papers")]
+struct Paper {
+    #[crdt(pk)]                       // primary key (excluded from tracked columns)
+    id: String,
+    title: String,
+    #[crdt(skeleton = "\"[]\"")]      // NOT NULL default for skeleton rows
+    authors: String,
+    #[crdt(rename = "is_favorite")]   // struct field name != DB column
+    favorite: bool,
+    #[crdt(skip)]                     // present on the struct, not synced
+    local_cache: Option<String>,
+}
+
+// Single table, or `schema![Paper, Collection, ..]` for several.
+let schema = recrr::Schema::of::<Paper>();
+
+crr.track_insert("papers", &id, Paper::ALL).await?;      // every tracked column, in order
+crr.track_update("papers", &id, &[Paper::TITLE]).await?; // typo/rename -> compile error
+```
+
+The generated constants (`Paper::TITLE`, `Paper::FAVORITE == "is_favorite"`,
+`Paper::ID`, `Paper::ALL`) are `&'static str`, so they drop straight into the
+existing `&[&str]` API with **no core API change and no runtime cost**. A
+composite-key junction table uses the container form
+`#[crdt(table = "paper_collections", pk = (paper_id, collection_id; sep = ':'))]`.
+
+Attributes: container `table` (required) and composite `pk`; field `pk`, `rename`,
+`skeleton` (a literal or `now_rfc3339`), and `skip`. The derive generates **only
+data** — a `TableSpec` and column constants — never SQL or write logic, so you
+still write your own SQL and call `track_*` yourself. A hand-written
+`Schema::new(vec![TableSpec::new(..)])` remains fully supported for dynamic
+schemas, and the two are wire-compatible (identical fingerprints).
+
+### Catching a forgotten `track_*`
+
+recrr never intercepts your writes, so forgetting a `track_*` after an `INSERT`
+silently drops that row from sync. Assert against it in your tests:
+
+```rust
+crr.debug_assert_all_tracked("papers").await?; // panics (debug builds) on an untracked row
+let ghosts = crr.untracked_rows("papers").await?; // or inspect the PKs yourself
+```
+
+Both are no-ops on the hot path (`debug_assert_all_tracked` compiles out in
+release); they only *detect* — they never auto-track or generate SQL.
+
 ## Schema migrations
 
 Your app schema evolves. `recrr` keeps its CRDT metadata in step through explicit

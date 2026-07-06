@@ -1,0 +1,5 @@
+error: a Crdt struct needs a primary key: mark a field with #[crdt(pk)] or declare a composite key with #[crdt(table = "...", pk = (a, b; sep = ':'))]
+ --> tests/ui/fail_no_pk.rs:5:8
+  |
+5 | struct Paper {
+  |        ^^^^^
