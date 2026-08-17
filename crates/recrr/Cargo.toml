@@ -62,6 +62,11 @@ required-features = ["rusqlite"]
 name = "audit"
 required-features = ["rusqlite"]
 
+# Adoption of rows that exist in the table but were never tracked.
+[[test]]
+name = "adopt"
+required-features = ["rusqlite"]
+
 [[example]]
 name = "two_devices"
 required-features = ["rusqlite"]
