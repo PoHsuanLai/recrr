@@ -447,6 +447,68 @@ impl Device {
         !rows.is_empty()
     }
 
+    /// Link a paper to a collection *without* tracking it, modelling a build
+    /// that never called `init()`: the row commits and the clock never learns
+    /// about it.
+    pub async fn link_untracked(&self, paper: &str, collection: &str) {
+        self.crr
+            .db()
+            .execute(
+                "INSERT INTO paper_collections (paper_id, collection_id) VALUES (?1, ?2)",
+                vec![
+                    Value::Text(paper.to_string()),
+                    Value::Text(collection.to_string()),
+                ],
+            )
+            .await
+            .unwrap();
+    }
+
+    /// Adopt an untracked link, as the repair pass does.
+    pub async fn adopt_link(&self, paper: &str, collection: &str) {
+        let pk = format!("{paper}:{collection}");
+        self.crr
+            .track_adopt("paper_collections", &pk, &[])
+            .await
+            .unwrap();
+    }
+
+    /// The sentinel clock for a link, or 0 when absent. Odd means alive, even
+    /// means deleted — the distinction the repair pass turns on.
+    pub async fn link_sentinel(&self, paper: &str, collection: &str) -> i64 {
+        let rows = self
+            .crr
+            .db()
+            .query(
+                "SELECT col_ver FROM paper_collections__crr_clock \
+                 WHERE pk = ?1 AND col_name = '__sentinel'",
+                vec![Value::Text(format!("{paper}:{collection}"))],
+            )
+            .await
+            .unwrap();
+        rows.into_iter()
+            .next()
+            .map(|r| r.get(0).as_integer().unwrap_or(0))
+            .unwrap_or(0)
+    }
+
+    /// The `col_ver` of a tracked column on a paper, or 0 when absent.
+    pub async fn paper_col_ver(&self, id: &str, col: &str) -> i64 {
+        let rows = self
+            .crr
+            .db()
+            .query(
+                "SELECT col_ver FROM papers__crr_clock WHERE pk = ?1 AND col_name = ?2",
+                vec![Value::Text(id.to_string()), Value::Text(col.to_string())],
+            )
+            .await
+            .unwrap();
+        rows.into_iter()
+            .next()
+            .map(|r| r.get(0).as_integer().unwrap_or(0))
+            .unwrap_or(0)
+    }
+
     pub async fn changes(&self) -> Vec<ChangeRow> {
         self.crr.changes_since(0).await.unwrap()
     }

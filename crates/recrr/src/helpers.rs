@@ -98,6 +98,25 @@ impl<D: Db> Crr<D> {
         }
     }
 
+    /// Whether a row is physically present in its table.
+    ///
+    /// Distinct from the sentinel, which records what peers should *believe*
+    /// about the row. The two disagree exactly when tracking failed, which is
+    /// what [`track_adopt`](Crr::track_adopt) repairs — so it has to consult the
+    /// table itself rather than trusting the clock. Unknown tables and malformed
+    /// composite keys report `false`, matching the other helpers here.
+    pub(crate) async fn row_exists(&self, table: &str, pk: &str) -> bool {
+        let Some(spec) = self.schema.table(table) else {
+            return false;
+        };
+        let (where_clause, params) = pk_where(&spec.pk, pk);
+        let sql = format!("SELECT 1 FROM {table} WHERE {where_clause}");
+        match self.db.query(&sql, params).await {
+            Ok(rows) => !rows.is_empty(),
+            Err(_) => false,
+        }
+    }
+
     /// Zero non-sentinel clocks so incoming values (col_ver >= 1) win on resurrect.
     pub(crate) async fn zero_column_clocks(&self, clock_table: &str, pk: &str) {
         let sql = format!(
